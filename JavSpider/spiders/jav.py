@@ -22,7 +22,8 @@ class JavSpider(scrapy.Spider):
     allowed_domains = []
     def start_requests(self):
         #读取配置
-        config = ReadConfig()
+        config_file = self.settings.get('CONFIG_FILE', 'config.ini')
+        config = ReadConfig(config_file)
         self.allowed_domains.append(config.get_markconfig('domain'))
         self.crawlrule = config.get_markconfig('crawlrule')
         self.mosaic = config.get_markconfig('mosaic')
