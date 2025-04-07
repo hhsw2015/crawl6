@@ -117,6 +117,9 @@ class JavSpiderProcessor:
         """提交文件到 Git"""
         self.logger.info(f"尝试提交 {files}，消息: {message}")
         try:
+            subprocess.run(["git", "config", "--global", "user.email", "hhsw2015@gmail.com"], check=True)
+            subprocess.run(["git", "config", "--global", "user.name", "hhsw2015"], check=True)
+            
             subprocess.run(["git", "add"] + files, check=True)
             result = subprocess.run(["git", "commit", "-m", message], capture_output=True, text=True)
             if result.returncode == 0:
