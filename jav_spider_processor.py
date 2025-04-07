@@ -3,10 +3,12 @@ import re
 import json
 import logging
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import subprocess
 from threading import Lock
-from scrapy.crawler import CrawlerProcess
+from scrapy.crawler import CrawlerRunner
 from scrapy.utils.project import get_project_settings
+from twisted.internet import reactor
+from twisted.internet.defer import DeferredList
 from uuid import uuid4
 
 # 设置日志（带线程名）
@@ -29,7 +31,7 @@ class JavSpiderProcessor:
         self.uncensored_json = "uncensored_summary.json"
         self.censored_magnet = "censored_magnet_summary.txt"
         self.uncensored_magnet = "uncensored_magnet_summary.txt"
-        self.max_threads = max_threads
+        self.max_threads = max_threads  # 保留参数，但实际并发由 Twisted 控制
         self.lock = Lock()
 
         # 设置 Scrapy 项目路径
@@ -74,14 +76,12 @@ class JavSpiderProcessor:
         self.logger.info(f"更新临时配置文件 {temp_config_file} 的 condition 为: {name}")
 
     def run_javspider(self, temp_config_file, task_id):
-        """运行 Scrapy 爬虫"""
-        settings = get_project_settings()  # 每个线程独立 settings
+        """运行 Scrapy 爬虫并返回 Deferred 对象"""
+        settings = get_project_settings()
         settings.set('CONFIG_FILE', temp_config_file, priority='cmdline')
         settings.set('TASK_ID', task_id, priority='cmdline')
-        process = CrawlerProcess(settings)
-        process.crawl('jav')
-        process.start()
-        self.logger.info(f"Scrapy 爬虫执行完成 (task_id: {task_id})")
+        runner = CrawlerRunner(settings)
+        return runner.crawl('jav')
 
     def append_to_summary(self, source_json, target_json, source_magnet, target_magnet, category):
         """将 JSON 和 magnet 结果追加到汇总文件（线程安全）"""
@@ -124,41 +124,14 @@ class JavSpiderProcessor:
             result = subprocess.run(["git", "commit", "-m", message], capture_output=True, text=True)
             if result.returncode == 0:
                 subprocess.run(["git", "push"], check=True)
-                self.logger.info(f"Git commit successful: {message}")
+                self.logger.info(f"Git 提交成功: {message}")
             else:
-                self.logger.warning(f"No changes to commit: {result.stderr}")
+                self.logger.warning(f"没有需要提交的更改: {result.stderr}")
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"Git error: {e.stderr}")
-
-    def process_task(self, line, category, source_file, target_json, target_magnet):
-        """单个任务的处理逻辑"""
-        try:
-            name = self.extract_name(line)
-            task_id = str(uuid4())[:8]
-            temp_config_file = f"config_{task_id}.ini"
-
-            # 预测输出文件名
-            settings = get_project_settings()
-            crawlrule = settings.get('CRAWLRULE', 'default_rule')
-            mosaic = settings.get('MOSAIC', 'all')
-            temp_json = f"CrawlResult/{name}_{crawlrule}_{mosaic}_{task_id}_info.json"
-            temp_magnet = f"CrawlResult/{name}_{crawlrule}_{mosaic}_{task_id}_magnet.txt"
-
-            self.update_config(name, temp_config_file)
-            self.run_javspider(temp_config_file, task_id)
-            self.append_to_summary(temp_json, target_json, temp_magnet, target_magnet, category)
-            self.comment_line(source_file, line)
-
-            if os.path.exists(temp_config_file):
-                os.remove(temp_config_file)
-
-            with self.lock:
-                self.crawl_count += 1
-        except Exception as e:
-            self.logger.error(f"任务处理失败（{line}）: {e}")
+            self.logger.error(f"Git 错误: {e.stderr}")
 
     def process(self):
-        """使用线程池处理两个文件并调用 Scrapy 爬虫"""
+        """使用 CrawlerRunner 处理两个文件并限制并发任务数量"""
         censored_lines = self.read_lines(self.censored_file)
         uncensored_lines = self.read_lines(self.uncensored_file)
 
@@ -170,26 +143,49 @@ class JavSpiderProcessor:
             target_json = self.censored_json if category == "censored" else self.uncensored_json
             target_magnet = self.censored_magnet if category == "censored" else self.uncensored_magnet
             source_file = self.censored_file if category == "censored" else self.uncensored_file
-
             for line in lines:
                 tasks.append((line, category, source_file, target_json, target_magnet))
 
-        with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
-            future_to_task = {
-                executor.submit(self.process_task, *task): task[0] for task in tasks
-            }
-            for future in as_completed(future_to_task):
-                line = future_to_task[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    self.logger.error(f"任务 {line} 执行失败: {e}")
+        max_concurrent_tasks = 5  # 设置最大并发任务数
+        deferreds = []
 
-        self.git_commit(
-            [self.censored_json, self.uncensored_json, self.censored_magnet, self.uncensored_magnet,
-             self.censored_file, self.uncensored_file],
-            f"Final update after {self.crawl_count} crawls"
-        )
+        def run_task(task):
+            line, category, source_file, target_json, target_magnet = task
+            name = self.extract_name(line)
+            task_id = str(uuid4())[:8]
+            temp_config_file = f"config_{task_id}.ini"
+            settings = get_project_settings()
+            temp_json = f"CrawlResult/{name}_{settings.get('CRAWLRULE', 'default_rule')}_{settings.get('MOSAIC', 'all')}_{task_id}_info.json"
+            temp_magnet = f"CrawlResult/{name}_{settings.get('CRAWLRULE', 'default_rule')}_{settings.get('MOSAIC', 'all')}_{task_id}_magnet.txt"
+
+            self.update_config(name, temp_config_file)
+            deferred = self.run_javspider(temp_config_file, task_id)
+            deferred.addCallback(lambda _: self.append_to_summary(temp_json, target_json, temp_magnet, target_magnet, category))
+            deferred.addCallback(lambda _: self.comment_line(source_file, line))
+            deferred.addCallback(lambda _: os.remove(temp_config_file) if os.path.exists(temp_config_file) else None)
+            deferred.addCallback(lambda _: setattr(self, 'crawl_count', self.crawl_count + 1))
+            return deferred
+
+        def schedule_tasks(remaining_tasks, active_deferreds):
+            while len(active_deferreds) < max_concurrent_tasks and remaining_tasks:
+                task = remaining_tasks.pop(0)
+                deferred = run_task(task)
+                active_deferreds.append(deferred)
+                deferred.addCallback(lambda _: schedule_tasks(remaining_tasks, [d for d in active_deferreds if not d.called]))
+
+        active_deferreds = []
+        schedule_tasks(tasks, active_deferreds)
+
+        def on_complete(_):
+            self.git_commit(
+                [self.censored_json, self.uncensored_json, self.censored_magnet, self.uncensored_magnet,
+                 self.censored_file, self.uncensored_file],
+                f"Final update after {self.crawl_count} crawls"
+            )
+            reactor.stop()
+
+        DeferredList(active_deferreds).addBoth(on_complete)
+        reactor.run()
 
 if __name__ == "__main__":
     processor = JavSpiderProcessor(max_threads=5)
