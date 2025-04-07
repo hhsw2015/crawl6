@@ -10,15 +10,13 @@
 import configparser
 import os
 
-'''
-读取配置文件
-'''
 class ReadConfig:
-    def __init__(self):
-        curpath = os.getcwd()
-        configpath = os.path.join(curpath, 'config.ini')
+    def __init__(self, config_path=None):
+        if config_path is None:
+            curpath = os.getcwd()
+            config_path = os.path.join(curpath, 'config.ini')
         self.cf = configparser.ConfigParser()
-        self.cf.read(configpath, encoding='utf-8')
+        self.cf.read(config_path, encoding='utf-8')
 
     def get_markconfig(self, param):
         value = self.cf.get("javconfig", param)
