@@ -15,7 +15,7 @@ def setup_logger():
 
 class AVSpider:
     def __init__(self, censored_end_page: int, uncensored_end_page: int, start_page: int = 1, 
-                 proxy_url: str = None, use_proxy: bool = False, max_workers: int = 5):  # 减少线程数
+                 proxy_url: str = None, use_proxy: bool = False, max_workers: int = 5):
         self.censored_base_url = "https://www.javbus.com/actresses"
         self.uncensored_base_url = "https://www.javbus.com/uncensored/actresses"
         self.censored_end_page = censored_end_page
@@ -41,7 +41,6 @@ class AVSpider:
     def _fetch_url(self, url: str, retries: int = 3) -> str:
         for attempt in range(retries):
             try:
-                # 添加随机延迟，模拟人类行为
                 time.sleep(random.uniform(1, 3))
                 response = requests.get(
                     url, proxies=self.proxies, headers=self.headers, impersonate="chrome110", timeout=30
@@ -50,7 +49,7 @@ class AVSpider:
                 self.logger.info(f"成功获取 {url}，状态码: {response.status_code}")
                 return response.text
             except Exception as e:
-                wait_time = 5 * (2 ** attempt)  # 增加重试间隔：5s, 10s, 20s
+                wait_time = 5 * (2 ** attempt)
                 self.logger.warning(f"获取 {url} 失败 (尝试 {attempt + 1}/{retries}): {str(e)}, 等待 {wait_time}s")
                 time.sleep(wait_time)
         self.logger.error(f"获取 {url} 失败，已达最大重试次数")
@@ -76,12 +75,13 @@ class AVSpider:
                 self.logger.debug(f"页面 {page} 提取到名字: {name}")
         return names
 
-    def crawl_pages(self, base_url: str, end_page: int, start_page: int) -> Dict[int, List[str]]:
+    def crawl_pages(self, base_url: str, start_page: int, end_page: int) -> Dict[int, List[str]]:
         results = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # 从 start_page 递增到 end_page
             future_to_page = {
                 executor.submit(self.extract_names_from_page, page, base_url): page
-                for page in range(end_page, start_page - 1, -1)
+                for page in range(start_page, end_page + 1)
             }
             for future in future_to_page:
                 page = future_to_page[future]
@@ -111,7 +111,8 @@ class AVSpider:
         total_names = 0
         mode = "a" if os.path.exists(filename) else "w"
         with open(filename, mode, encoding="utf-8") as f:
-            for page in range(max(results.keys()), min(results.keys()) - 1, -1):
+            # 从小到大写入页面
+            for page in range(min(results.keys()), max(results.keys()) + 1):
                 if page in results and results[page]:
                     f.write(f"\n页面 {page}:\n")
                     for i, name in enumerate(results[page], 1):
@@ -126,11 +127,11 @@ class AVSpider:
 
     def crawl_and_save(self):
         self.logger.info("开始爬取有码女优...")
-        censored_results = self.crawl_pages(self.censored_base_url, self.censored_end_page, self.start_page)
+        censored_results = self.crawl_pages(self.censored_base_url, self.start_page, self.censored_end_page)
         self.write_and_commit(censored_results, "censored.txt")
 
         self.logger.info("开始爬取无码女优...")
-        uncensored_results = self.crawl_pages(self.uncensored_base_url, self.uncensored_end_page, self.start_page)
+        uncensored_results = self.crawl_pages(self.uncensored_base_url, self.start_page, self.uncensored_end_page)
         self.write_and_commit(uncensored_results, "uncensored.txt")
 
 if __name__ == "__main__":
@@ -145,6 +146,6 @@ if __name__ == "__main__":
         start_page=start_page,
         proxy_url=None,
         use_proxy=False,
-        max_workers=5  # 减少线程数以降低请求频率
+        max_workers=5
     )
     spider.crawl_and_save()
