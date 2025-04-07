@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import time
+import random
 from typing import List, Dict
 import subprocess
 
@@ -14,7 +15,7 @@ def setup_logger():
 
 class AVSpider:
     def __init__(self, censored_end_page: int, uncensored_end_page: int, start_page: int = 1, 
-                 proxy_url: str = None, use_proxy: bool = False, max_workers: int = 10):
+                 proxy_url: str = None, use_proxy: bool = False, max_workers: int = 5):  # 减少线程数
         self.censored_base_url = "https://www.javbus.com/actresses"
         self.uncensored_base_url = "https://www.javbus.com/uncensored/actresses"
         self.censored_end_page = censored_end_page
@@ -40,15 +41,18 @@ class AVSpider:
     def _fetch_url(self, url: str, retries: int = 3) -> str:
         for attempt in range(retries):
             try:
+                # 添加随机延迟，模拟人类行为
+                time.sleep(random.uniform(1, 3))
                 response = requests.get(
                     url, proxies=self.proxies, headers=self.headers, impersonate="chrome110", timeout=30
                 )
                 response.raise_for_status()
-                self.logger.debug(f"成功获取 {url}，状态码: {response.status_code}")
+                self.logger.info(f"成功获取 {url}，状态码: {response.status_code}")
                 return response.text
             except Exception as e:
-                self.logger.warning(f"获取 {url} 失败 (尝试 {attempt + 1}/{retries}): {str(e)}")
-                time.sleep(2 ** attempt)
+                wait_time = 5 * (2 ** attempt)  # 增加重试间隔：5s, 10s, 20s
+                self.logger.warning(f"获取 {url} 失败 (尝试 {attempt + 1}/{retries}): {str(e)}, 等待 {wait_time}s")
+                time.sleep(wait_time)
         self.logger.error(f"获取 {url} 失败，已达最大重试次数")
         return ""
 
@@ -104,9 +108,8 @@ class AVSpider:
             raise
 
     def write_and_commit(self, results: Dict[int, List[str]], filename: str):
-        """写入文件并每 500 个名字提交一次"""
         total_names = 0
-        mode = "a" if os.path.exists(filename) else "w"  # 检查文件是否存在
+        mode = "a" if os.path.exists(filename) else "w"
         with open(filename, mode, encoding="utf-8") as f:
             for page in range(max(results.keys()), min(results.keys()) - 1, -1):
                 if page in results and results[page]:
@@ -142,6 +145,6 @@ if __name__ == "__main__":
         start_page=start_page,
         proxy_url=None,
         use_proxy=False,
-        max_workers=10
+        max_workers=5  # 减少线程数以降低请求频率
     )
     spider.crawl_and_save()
