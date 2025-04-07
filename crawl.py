@@ -90,47 +90,48 @@ class AVSpider:
             self.logger.error(f"Git error: {e.stderr}")
 
     def crawl_and_save_batch(self, base_url: str, start_page: int, end_page: int, filename: str):
-        """每爬取 500 个名字提交一次"""
+        """使用多线程，每爬取 500 个名字提交一次"""
         total_names = 0
-        results = {}
-        mode = "a" if os.path.exists(filename) else "w"
-        
+        results = {}  # 存储页面和名字的字典
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            for page in range(start_page, end_page + 1):
-                # 爬取当前页面
-                future = executor.submit(self.extract_names_from_page, page, base_url)
+            # 提交所有页面任务
+            future_to_page = {
+                executor.submit(self.extract_names_from_page, page, base_url): page
+                for page in range(start_page, end_page + 1)
+            }
+
+            # 处理结果
+            for future in future_to_page:
+                page = future_to_page[future]
                 try:
                     names = future.result()
                     results[page] = names
                     total_names += len(names)
-                    
+
                     # 达到 500 个名字时写入并提交
                     if total_names >= 500:
                         with open(filename, "a", encoding="utf-8") as f:
                             for p in sorted(results.keys()):
-                                if results[p]:
-                                    f.write(f"\n页面 {p}:\n")
-                                    for i, name in enumerate(results[p], 1):
-                                        f.write(f"{i}. {name}\n")
+                                for name in results[p]:
+                                    f.write(f"{name}\n")  # 仅写入名字，每行一个
                         self.git_commit(filename, f"Update {filename} with {total_names} names")
-                        # 重置计数和缓冲区
+                        # 清空缓冲区和计数
                         total_names = 0
-                        results = {}
+                        results.clear()
                 except Exception as e:
                     self.logger.error(f"页面 {page} 处理失败: {str(e)}")
                     results[page] = []
 
-        # 处理剩余不足 500 的数据
-        if total_names > 0:
-            with open(filename, "a", encoding="utf-8") as f:
-                for p in sorted(results.keys()):
-                    if results[p]:
-                        f.write(f"\n页面 {p}:\n")
-                        for i, name in enumerate(results[p], 1):
-                            f.write(f"{i}. {name}\n")
-            self.git_commit(filename, f"Update {filename} with {total_names} names (final)")
-        
-        self.logger.info(f"总计写入 {total_names} 个名字到 {filename}")
+            # 处理剩余不足 500 的数据
+            if total_names > 0:
+                with open(filename, "a", encoding="utf-8") as f:
+                    for p in sorted(results.keys()):
+                        for name in results[p]:
+                            f.write(f"{name}\n")  # 仅写入名字，每行一个
+                self.git_commit(filename, f"Update {filename} with {total_names} names (final)")
+
+        self.logger.info(f"总计处理 {end_page - start_page + 1} 页到 {filename}")
 
     def crawl_and_save(self):
         self.logger.info("开始爬取有码女优...")
