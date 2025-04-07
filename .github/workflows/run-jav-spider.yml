@@ -1,0 +1,49 @@
+name: Run JavSpiderProcessor
+
+# 触发条件：推送代码到 main 分支时运行
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # 允许手动触发
+
+# 配置权限
+permissions:
+  contents: write  # 允许写入仓库内容
+
+jobs:
+  run-spider:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. 设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. 安装依赖
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # 4. 运行 jav_spider_processor.py
+      - name: Run JavSpiderProcessor
+        run: |
+          python jav_spider_processor.py
+
+      # 5. 提交结果到 GitHub
+      - name: Commit and Push Results
+        run: |
+          git config --global user.name "hhsw2015"
+          git config --global user.email "hhsw2015@gmail.com"
+          git add .
+          git commit -m "Update crawl results from GitHub Actions [$(date)]" || echo "No changes to commit"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
