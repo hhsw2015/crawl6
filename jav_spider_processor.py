@@ -31,7 +31,7 @@ class JavSpiderProcessor:
         self.uncensored_json = "uncensored_summary.json"
         self.censored_magnet = "censored_magnet_summary.txt"
         self.uncensored_magnet = "uncensored_magnet_summary.txt"
-        self.max_threads = max_threads  # 保留参数，但实际并发由 Twisted 控制
+        self.max_threads = max_threads
         self.lock = Lock()
 
         # 设置 Scrapy 项目路径
@@ -63,17 +63,24 @@ class JavSpiderProcessor:
         match = re.match(r"([^（]+)(?:（.*）)?", line)
         return match.group(1) if match else line
 
-    def update_config(self, name, temp_config_file):
-        """更新临时 config.ini 文件"""
+    def update_config(self, name, temp_config_file, category):
+        """更新临时 config.ini 文件，根据 category 设置 mosaic 参数"""
         with open(self.config_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
         with open(temp_config_file, "w", encoding="utf-8") as f:
             for line in lines:
                 if line.strip().startswith("condition ="):
                     f.write(f"condition = {name}\n")
+                elif line.strip().startswith("mosaic ="):
+                    if category == "censored":
+                        f.write("mosaic = yes\n")
+                    elif category == "uncensored":
+                        f.write("mosaic = no\n")
+                    else:
+                        f.write("mosaic = all\n")  # 默认值，防止意外情况
                 else:
                     f.write(line)
-        self.logger.info(f"更新临时配置文件 {temp_config_file} 的 condition 为: {name}")
+        self.logger.info(f"更新临时配置文件 {temp_config_file} 的 condition 为: {name}, mosaic 为: {'yes' if category == 'censored' else 'no'}")
 
     def run_javspider(self, temp_config_file, task_id):
         """运行 Scrapy 爬虫并返回 Deferred 对象"""
@@ -158,7 +165,7 @@ class JavSpiderProcessor:
             temp_json = f"CrawlResult/{name}_{settings.get('CRAWLRULE', 'default_rule')}_{settings.get('MOSAIC', 'all')}_{task_id}_info.json"
             temp_magnet = f"CrawlResult/{name}_{settings.get('CRAWLRULE', 'default_rule')}_{settings.get('MOSAIC', 'all')}_{task_id}_magnet.txt"
 
-            self.update_config(name, temp_config_file)
+            self.update_config(name, temp_config_file, category)  # 传递 category 参数
             deferred = self.run_javspider(temp_config_file, task_id)
             deferred.addCallback(lambda _: self.append_to_summary(temp_json, target_json, temp_magnet, target_magnet, category))
             deferred.addCallback(lambda _: self.comment_line(source_file, line))
