@@ -10,8 +10,8 @@ import os
 from readini import ReadConfig
 
 class JavspiderPipeline(object):
-    def __init__(self):
-        config = ReadConfig()
+    def __init__(self, config_file, task_id=None):
+        config = ReadConfig(config_file)
         conditions = []
         crawlrule = config.get_markconfig('crawlrule')
 
@@ -45,6 +45,12 @@ class JavspiderPipeline(object):
         self.file = codecs.open('CrawlResult/' + info, 'w', encoding='utf-8')
         self.txt = codecs.open('CrawlResult/' + magnet, 'w', encoding='utf-8')
 
+    @classmethod
+    def from_crawler(cls, crawler):
+        config_file = crawler.settings.get('CONFIG_FILE', 'config.ini')
+        task_id = crawler.settings.get('TASK_ID')
+        return cls(config_file, task_id)
+        
     def process_item(self, item, spider):
         line = json.dumps(dict(item), ensure_ascii=False) + "\n"
         self.file.write(line)
