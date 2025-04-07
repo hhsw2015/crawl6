@@ -75,26 +75,9 @@ class AVSpider:
                 self.logger.debug(f"页面 {page} 提取到名字: {name}")
         return names
 
-    def crawl_pages(self, base_url: str, start_page: int, end_page: int) -> Dict[int, List[str]]:
-        results = {}
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 从 start_page 递增到 end_page
-            future_to_page = {
-                executor.submit(self.extract_names_from_page, page, base_url): page
-                for page in range(start_page, end_page + 1)
-            }
-            for future in future_to_page:
-                page = future_to_page[future]
-                try:
-                    names = future.result()
-                    results[page] = names
-                except Exception as e:
-                    self.logger.error(f"页面 {page} 处理失败: {str(e)}")
-                    results[page] = []
-        return results
-
     def git_commit(self, filename: str, message: str):
         """提交文件到 Git 仓库"""
+        self.logger.info(f"尝试提交 {filename}，消息: {message}")
         try:
             subprocess.run(["git", "add", filename], check=True)
             result = subprocess.run(["git", "commit", "-m", message], capture_output=True, text=True)
@@ -105,34 +88,56 @@ class AVSpider:
                 self.logger.warning(f"No changes to commit: {result.stderr}")
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Git error: {e.stderr}")
-            raise
 
-    def write_and_commit(self, results: Dict[int, List[str]], filename: str):
+    def crawl_and_save_batch(self, base_url: str, start_page: int, end_page: int, filename: str):
+        """每爬取 500 个名字提交一次"""
         total_names = 0
+        results = {}
         mode = "a" if os.path.exists(filename) else "w"
-        with open(filename, mode, encoding="utf-8") as f:
-            # 从小到大写入页面
-            for page in range(min(results.keys()), max(results.keys()) + 1):
-                if page in results and results[page]:
-                    f.write(f"\n页面 {page}:\n")
-                    for i, name in enumerate(results[page], 1):
-                        f.write(f"{i}. {name}\n")
-                        total_names += 1
-                        if total_names % 500 == 0:
-                            f.flush()
-                            self.git_commit(filename, f"Update {filename} with {total_names} names")
-        if total_names % 500 != 0:
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            for page in range(start_page, end_page + 1):
+                # 爬取当前页面
+                future = executor.submit(self.extract_names_from_page, page, base_url)
+                try:
+                    names = future.result()
+                    results[page] = names
+                    total_names += len(names)
+                    
+                    # 达到 500 个名字时写入并提交
+                    if total_names >= 500:
+                        with open(filename, "a", encoding="utf-8") as f:
+                            for p in sorted(results.keys()):
+                                if results[p]:
+                                    f.write(f"\n页面 {p}:\n")
+                                    for i, name in enumerate(results[p], 1):
+                                        f.write(f"{i}. {name}\n")
+                        self.git_commit(filename, f"Update {filename} with {total_names} names")
+                        # 重置计数和缓冲区
+                        total_names = 0
+                        results = {}
+                except Exception as e:
+                    self.logger.error(f"页面 {page} 处理失败: {str(e)}")
+                    results[page] = []
+
+        # 处理剩余不足 500 的数据
+        if total_names > 0:
+            with open(filename, "a", encoding="utf-8") as f:
+                for p in sorted(results.keys()):
+                    if results[p]:
+                        f.write(f"\n页面 {p}:\n")
+                        for i, name in enumerate(results[p], 1):
+                            f.write(f"{i}. {name}\n")
             self.git_commit(filename, f"Update {filename} with {total_names} names (final)")
+        
         self.logger.info(f"总计写入 {total_names} 个名字到 {filename}")
 
     def crawl_and_save(self):
         self.logger.info("开始爬取有码女优...")
-        censored_results = self.crawl_pages(self.censored_base_url, self.start_page, self.censored_end_page)
-        self.write_and_commit(censored_results, "censored.txt")
+        self.crawl_and_save_batch(self.censored_base_url, self.start_page, self.censored_end_page, "censored.txt")
 
         self.logger.info("开始爬取无码女优...")
-        uncensored_results = self.crawl_pages(self.uncensored_base_url, self.start_page, self.uncensored_end_page)
-        self.write_and_commit(uncensored_results, "uncensored.txt")
+        self.crawl_and_save_batch(self.uncensored_base_url, self.start_page, self.uncensored_end_page, "uncensored.txt")
 
 if __name__ == "__main__":
     import os
