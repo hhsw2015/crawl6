@@ -104,6 +104,13 @@ class JavspiderDownloaderMiddleware(object):
         spider.logger.info('Spider opened: %s' % spider.name)
 
 class RandomUserAgentMiddleware(object):
+    def __init__(self, settings):
+        self.settings = settings
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(crawler.settings)
+        
     def process_request(self, request, spider):
         referer = request.url
         if referer:
@@ -120,7 +127,8 @@ class RandomUserAgentMiddleware(object):
         if 'existmag=mag' in DEFAULT_REQUEST_HEADERS['cookie']:
             defaulcookie = DEFAULT_REQUEST_HEADERS['cookie'].replace(' existmag=mag;', '')
 
-        config = ReadConfig()
+        config_file = self.settings.get('CONFIG_FILE', 'config.ini')
+        config = ReadConfig(config_file)
         #获取全部磁力
         if config.get_markconfig('crawlall') == 'yes':
             cookie = defaulcookie + " existmag=all;"
